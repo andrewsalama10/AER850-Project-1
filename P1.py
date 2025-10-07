@@ -53,8 +53,6 @@ for (x, y) in [('X', 'Y'), ('X', 'Z'), ('Y', 'Z')]:
     plt.savefig(f"scatter_{x}_{y}.png")
     plt.close()
 
-print("Step 2 visualization figures saved in current directory.")
-
 ############################################################
 # STEP 3: CORRELATION ANALYSIS
 ############################################################
@@ -71,12 +69,10 @@ plt.tight_layout()
 plt.savefig("correlation_matrix.png")
 plt.close()
 
-print("Correlation heatmap saved in current directory.")
-
 ############################################################
 # STEP 4: CLASSIFICATION MODEL DEVELOPMENT / ENGINEERING
 ############################################################
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.neighbors import KNeighborsClassifier
@@ -99,27 +95,50 @@ print("Testing samples:", len(X_test))
 # Define models and parameter grids
 models = {
     "KNN": (Pipeline([("scaler", StandardScaler()), ("clf", KNeighborsClassifier())]),
-            {"clf__n_neighbors": [3, 5, 7]}),
+            {"clf__n_neighbors": [3, 5, 7],
+             "clf__weights": ["uniform", "distance"]}),
 
-    "SVC": (Pipeline([("scaler", StandardScaler()), ("clf", SVC(probability=True))]),
-            {"clf__C": [0.1, 1, 10], "clf__kernel": ["rbf", "linear"]}),
+    "SVC": (Pipeline([("scaler", StandardScaler()), ("clf", SVC(kernel="linear", probability=True, random_state=42))]),
+            {"clf__C": [0.01, 0.1, 1],
+             "clf__gamma": ["scale", "auto"]}),
 
     "RandomForest": (RandomForestClassifier(random_state=42),
-                     {"n_estimators": [100, 200], "max_depth": [None, 10]}),
-
-    "GradientBoosting": (GradientBoostingClassifier(random_state=42),
-                         {"n_estimators": [100, 200], "learning_rate": [0.05, 0.1]})
+                     {"n_estimators": [100, 200],
+                      "max_depth": [None, 10]})
 }
 
-# Train and tune each model
+# Train and tune the first three models using GridSearchCV
 best_models = {}
 for name, (model, params) in models.items():
-    print(f"\nTuning {name}...")
+    print(f"\nTuning {name} (GridSearchCV)...")
     grid = GridSearchCV(model, param_grid=params, scoring="f1_macro", cv=5, n_jobs=-1)
     grid.fit(X_train, y_train)
     print(f"Best {name} parameters:", grid.best_params_)
-    print(f"Best {name} F1 (CV):", grid.best_score_)
+    print(f"Best {name} F1 (CV): {grid.best_score_:.4f}")
     best_models[name] = grid.best_estimator_
+
+# train and tune the fourth model using RandomizedSearchCV
+print("\nTuning Gradient Boosting (RandomizedSearchCV)...")
+gbc = GradientBoostingClassifier(random_state=42)
+gbc_dist = {
+    "n_estimators": [100, 200, 300],
+    "learning_rate": [0.01, 0.05, 0.1],
+    "max_depth": [2, 3, 4]
+}
+
+rand_search = RandomizedSearchCV(
+    gbc,
+    param_distributions=gbc_dist,
+    n_iter=5,
+    cv=5,
+    scoring="f1_macro",
+    random_state=42,
+    n_jobs=-1
+)
+rand_search.fit(X_train, y_train)
+print("Best Gradient Boosting parameters:", rand_search.best_params_)
+print(f"Best Gradient Boosting F1 (CV): {rand_search.best_score_:.4f}")
+best_models["GradientBoosting"] = rand_search.best_estimator_
 
 print("\nAll models trained and tuned successfully.")
 
@@ -138,9 +157,9 @@ for name, model in best_models.items():
     y_pred = model.predict(X_test)
 
     acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred, average='macro', zero_division=0)
-    rec = recall_score(y_test, y_pred, average='macro', zero_division=0)
-    f1 = f1_score(y_test, y_pred, average='macro', zero_division=0)
+    prec = precision_score(y_test, y_pred, average='macro')
+    rec = recall_score(y_test, y_pred, average='macro')
+    f1 = f1_score(y_test, y_pred, average='macro')
 
     results.append({
         "Model": name,
@@ -152,7 +171,7 @@ for name, model in best_models.items():
 
     print(f"Accuracy: {acc:.3f} | Precision: {prec:.3f} | Recall: {rec:.3f} | F1: {f1:.3f}")
 
-# Summarize all results in a table
+# Summarize results
 results_df = pd.DataFrame(results).sort_values(by="F1 Score", ascending=False)
 print("\n=== Model Performance Summary ===")
 print(results_df)
@@ -162,8 +181,9 @@ best_model_name = results_df.iloc[0]['Model']
 best_model = best_models[best_model_name]
 print(f"\nBest Performing Model: {best_model_name}")
 
-# Confusion Matrix
-cm = confusion_matrix(y_test, y_pred)
+# Confusion Matrix for best model
+y_best_pred = best_model.predict(X_test)
+cm = confusion_matrix(y_test, y_best_pred)
 sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
 plt.title(f"Confusion Matrix - {best_model_name}")
 plt.xlabel("Predicted Label")
@@ -216,7 +236,7 @@ plt.tight_layout()
 plt.savefig("_confusion_matrix_stacked.png")
 plt.close()
 
-# Summary table for reporting
+# Summarize results using a table
 stack_results = pd.DataFrame([{
     "Model": "Stacked (RF + SVC)",
     "Accuracy": stack_accuracy,
@@ -227,9 +247,6 @@ stack_results = pd.DataFrame([{
 
 print("\nStacked Model Performance Summary:")
 print(stack_results)
-
-# Optionally, store in dictionary for Step 7
-stacked_model = stack_model
 
 ############################################################
 # STEP 7: MODEL EVALUATION
@@ -243,9 +260,9 @@ model_filename = f"best_model_{best_model_name}.joblib"
 joblib.dump(best_model, model_filename)
 
 # Save the stacked model
-joblib.dump(stacked_model, "stacked_model.joblib")
+joblib.dump(stack_model, "stacked_model.joblib")
 
-# Predict given coordinates
+# Given coordinates for predictions
 coords = np.array([
     [9.375, 3.0625, 1.51],
     [6.995, 5.125, 0.3875],
@@ -261,7 +278,8 @@ for pt, p in zip(coords, pred_best):
     print(f"{pt.tolist()} -> Predicted Step: {int(p)}")
 
 # Predictions using the stacked model
-pred_stack = stacked_model.predict(coords)
+pred_stack = stack_model.predict(coords)
 print("\nPredictions using Stacked Model:")
 for pt, p in zip(coords, pred_stack):
+    print(f"{pt.tolist()} -> Predicted Step: {int(p)}")coords, pred_stack):
     print(f"{pt.tolist()} -> Predicted Step: {int(p)}")
